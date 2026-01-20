@@ -1,4 +1,4 @@
-use crate::config::{Config, NetworkConfig};
+use crate::config::{ActivationType, Config, NetworkConfig};
 use crate::game::{CompetitiveGame, Direction, GameState};
 use crate::neural_network::NeuralNetwork;
 use rand::rngs::StdRng;
@@ -27,6 +27,62 @@ impl Agent {
         Self {
             network: NeuralNetwork::new(network_config, rng),
             fitness: 0.0,
+        }
+    }
+
+    /// Create an agent with a random architecture within the growth config bounds
+    pub fn with_random_architecture(config: &Config, rng: &mut StdRng) -> Self {
+        let growth = &config.growth;
+        let input_size = config.network.input_size;
+        let output_size = config.network.output_size;
+
+        // Generate random hidden layer sizes
+        let mut hidden_layers = Vec::new();
+        for _ in 0..growth.start_layers {
+            let neurons = rng.gen_range(growth.min_start_neurons..=growth.max_start_neurons);
+            hidden_layers.push(neurons);
+        }
+
+        let network = NeuralNetwork::with_hidden_layers(
+            input_size,
+            &hidden_layers,
+            output_size,
+            config.network.activation,
+            rng,
+        );
+
+        Self {
+            network,
+            fitness: 0.0,
+        }
+    }
+
+    /// Try to grow the network if conditions are met
+    pub fn maybe_grow(&mut self, score: usize, config: &Config, rng: &mut StdRng) -> bool {
+        let growth = &config.growth;
+
+        if !growth.enabled {
+            return false;
+        }
+
+        // Check if score threshold met
+        if score < growth.growth_score_threshold {
+            return false;
+        }
+
+        // Check if network is already at max size
+        let sizes = self.network.hidden_layer_sizes();
+        if sizes.len() >= growth.max_hidden_layers {
+            if sizes.iter().all(|&s| s >= growth.max_neurons_per_layer) {
+                return false; // Already maxed out
+            }
+        }
+
+        // Probabilistic growth
+        if rng.gen::<f64>() < growth.growth_probability {
+            self.network.grow(rng)
+        } else {
+            false
         }
     }
 
@@ -102,14 +158,24 @@ pub struct Population {
     pub best_score_ever: usize,         // The record to beat
     pub best_score_seed: Option<u64>,   // Seed of the game that set the record
     pub record_agent: Option<Agent>,    // The agent that set the record
+    pub generations_since_improvement: usize, // For plateau detection
+    pub floor_neurons: usize,           // Minimum neurons for new agents (increases on plateau)
     config: Config,
 }
 
 impl Population {
     pub fn new(config: Config, rng: &mut StdRng) -> Self {
-        let agents = (0..config.evolution.population_size)
-            .map(|_| Agent::new(&config.network, rng))
-            .collect();
+        let agents: Vec<Agent> = if config.growth.enabled {
+            // Create agents with variable architectures
+            (0..config.evolution.population_size)
+                .map(|_| Agent::with_random_architecture(&config, rng))
+                .collect()
+        } else {
+            // Use fixed architecture from config
+            (0..config.evolution.population_size)
+                .map(|_| Agent::new(&config.network, rng))
+                .collect()
+        };
 
         Self {
             agents,
@@ -117,6 +183,8 @@ impl Population {
             best_score_ever: 0,
             best_score_seed: None,
             record_agent: None,
+            generations_since_improvement: 0,
+            floor_neurons: config.growth.min_start_neurons,
             config,
         }
     }
@@ -147,6 +215,8 @@ impl Population {
             best_score_ever: best_score,
             best_score_seed,
             record_agent,
+            generations_since_improvement: 0,
+            floor_neurons: config.growth.min_start_neurons,
             config,
         }
     }
@@ -225,6 +295,21 @@ impl Population {
             self.best_score_ever = generation_best_score;
             self.best_score_seed = Some(generation_best_seed);
             self.record_agent = Some(self.agents[generation_best_agent_idx].clone());
+            self.generations_since_improvement = 0;
+        } else {
+            self.generations_since_improvement += 1;
+        }
+
+        // Check for plateau - increase floor neurons if stuck
+        if self.config.growth.enabled
+            && self.generations_since_improvement >= self.config.growth.plateau_generations
+        {
+            let old_floor = self.floor_neurons;
+            self.floor_neurons = (self.floor_neurons + 8).min(self.config.growth.max_neurons_per_layer);
+            if self.floor_neurons > old_floor {
+                println!("  >>> PLATEAU DETECTED: Floor neurons increased {} -> {} <<<", old_floor, self.floor_neurons);
+            }
+            self.generations_since_improvement = 0; // Reset counter
         }
 
         // Sort by fitness (descending)
@@ -284,15 +369,29 @@ impl Population {
 
     pub fn evolve(&mut self, rng: &mut StdRng) {
         let evolution_config = &self.config.evolution;
+        let growth_enabled = self.config.growth.enabled;
         let mut new_agents = Vec::with_capacity(evolution_config.population_size);
 
-        // Elitism: copy top N agents unchanged
+        // Elitism: copy top N agents, potentially with growth
         for agent in self.agents.iter().take(evolution_config.elitism_count) {
-            new_agents.push(agent.clone());
+            let mut elite = agent.clone();
+            // Top agents get a chance to grow based on their performance
+            if growth_enabled {
+                // Use best_score_ever as proxy for this agent's achievement
+                elite.maybe_grow(self.best_score_ever, &self.config, rng);
+            }
+            new_agents.push(elite);
         }
 
         // Fill the rest with offspring
         while new_agents.len() < evolution_config.population_size {
+            // Small chance to inject a fresh random agent (maintains diversity)
+            if growth_enabled && rng.gen::<f64>() < 0.02 {
+                let fresh = self.create_agent_with_floor(rng);
+                new_agents.push(fresh);
+                continue;
+            }
+
             let parent1 = self.tournament_select(rng);
             let parent2 = self.tournament_select(rng);
 
@@ -308,14 +407,45 @@ impl Population {
                 rng,
             );
 
-            new_agents.push(Agent {
+            let mut child = Agent {
                 network: child_network,
                 fitness: 0.0,
-            });
+            };
+
+            // Children of successful parents may grow
+            if growth_enabled && parent1.fitness > 1.0 {
+                child.maybe_grow(self.best_score_ever, &self.config, rng);
+            }
+
+            new_agents.push(child);
         }
 
         self.agents = new_agents;
         self.generation += 1;
+    }
+
+    /// Create a new agent with architecture respecting the current floor
+    fn create_agent_with_floor(&self, rng: &mut StdRng) -> Agent {
+        let growth = &self.config.growth;
+        let input_size = self.config.network.input_size;
+        let output_size = self.config.network.output_size;
+
+        // Use floor_neurons as minimum
+        let neurons = rng.gen_range(self.floor_neurons..=growth.max_start_neurons.max(self.floor_neurons));
+        let hidden_layers = vec![neurons];
+
+        let network = NeuralNetwork::with_hidden_layers(
+            input_size,
+            &hidden_layers,
+            output_size,
+            self.config.network.activation,
+            rng,
+        );
+
+        Agent {
+            network,
+            fitness: 0.0,
+        }
     }
 
     pub fn stats(&self) -> PopulationStats {
@@ -334,6 +464,19 @@ impl Population {
 
     pub fn best_agent(&self) -> Option<&Agent> {
         self.agents.first()
+    }
+
+    /// Get network complexity statistics
+    pub fn network_stats(&self) -> (usize, usize, f64) {
+        let complexities: Vec<usize> = self.agents.iter()
+            .map(|a| a.network.complexity())
+            .collect();
+
+        let min = *complexities.iter().min().unwrap_or(&0);
+        let max = *complexities.iter().max().unwrap_or(&0);
+        let avg = complexities.iter().sum::<usize>() as f64 / complexities.len() as f64;
+
+        (min, max, avg)
     }
 }
 

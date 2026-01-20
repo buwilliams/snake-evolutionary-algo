@@ -10,26 +10,33 @@
   },
   "network": {
     "input_size": 68,
-    "hidden_layers": [
-      256,
-      128,
-      64
-    ],
+    "hidden_layers": [32],
     "output_size": 4,
     "activation": "ReLU"
   },
   "evolution": {
-    "population_size": 500,
+    "population_size": 2000,
     "tournament_size": 5,
-    "elitism_count": 10,
-    "mutation_rate": 0.1,
-    "mutation_strength": 0.3,
+    "elitism_count": 20,
+    "mutation_rate": 0.2,
+    "mutation_strength": 0.5,
     "crossover_rate": 0.7
   },
   "training": {
     "generations": 20000,
     "games_per_evaluation": 3,
-    "save_interval": 50,
+    "save_interval": 100,
     "seed": null
+  },
+  "growth": {
+    "enabled": true,
+    "min_start_neurons": 16,
+    "max_start_neurons": 32,
+    "start_layers": 1,
+    "growth_score_threshold": 3,
+    "growth_probability": 0.3,
+    "plateau_generations": 500,
+    "max_neurons_per_layer": 128,
+    "max_hidden_layers": 4
   }
 }

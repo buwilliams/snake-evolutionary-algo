@@ -60,22 +60,123 @@ pub struct NeuralNetwork {
 
 impl NeuralNetwork {
     pub fn new(config: &NetworkConfig, rng: &mut StdRng) -> Self {
+        Self::with_hidden_layers(config.input_size, &config.hidden_layers, config.output_size, config.activation, rng)
+    }
+
+    /// Create a network with specific hidden layer sizes
+    pub fn with_hidden_layers(
+        input_size: usize,
+        hidden_layers: &[usize],
+        output_size: usize,
+        activation: ActivationType,
+        rng: &mut StdRng,
+    ) -> Self {
         let mut layers = Vec::new();
-        let mut prev_size = config.input_size;
+        let mut prev_size = input_size;
 
         // Hidden layers
-        for &hidden_size in &config.hidden_layers {
+        for &hidden_size in hidden_layers {
             layers.push(Layer::new(prev_size, hidden_size, rng));
             prev_size = hidden_size;
         }
 
         // Output layer
-        layers.push(Layer::new(prev_size, config.output_size, rng));
+        layers.push(Layer::new(prev_size, output_size, rng));
 
-        Self {
-            layers,
-            activation: config.activation,
+        Self { layers, activation }
+    }
+
+    /// Get the hidden layer sizes (excludes output layer)
+    pub fn hidden_layer_sizes(&self) -> Vec<usize> {
+        self.layers.iter()
+            .take(self.layers.len().saturating_sub(1))
+            .map(|l| l.output_size())
+            .collect()
+    }
+
+    /// Grow the network by adding neurons to an existing layer or adding a new layer
+    /// Returns true if growth occurred
+    pub fn grow(&mut self, rng: &mut StdRng) -> bool {
+        if self.layers.len() < 2 {
+            return false; // Need at least input->output
         }
+
+        let hidden_count = self.layers.len() - 1;
+
+        // Decide: add neurons to existing layer (70%) or add new layer (30%)
+        if hidden_count > 0 && rng.gen::<f64>() < 0.7 {
+            // Add neurons to a random hidden layer
+            let layer_idx = rng.gen_range(0..hidden_count);
+            self.add_neurons_to_layer(layer_idx, 8, rng); // Add 8 neurons
+            true
+        } else if hidden_count < 4 {
+            // Add a new hidden layer (max 4 hidden layers)
+            self.add_hidden_layer(16, rng); // New layer with 16 neurons
+            true
+        } else {
+            // Already at max layers, add neurons instead
+            let layer_idx = rng.gen_range(0..hidden_count);
+            self.add_neurons_to_layer(layer_idx, 8, rng);
+            true
+        }
+    }
+
+    /// Add neurons to an existing hidden layer
+    fn add_neurons_to_layer(&mut self, layer_idx: usize, count: usize, rng: &mut StdRng) {
+        if layer_idx >= self.layers.len() - 1 {
+            return; // Don't modify output layer
+        }
+
+        let layer = &mut self.layers[layer_idx];
+        let input_size = layer.input_size();
+        let std_dev = (2.0 / input_size as f64).sqrt();
+
+        // Add new neurons (new rows in weights matrix, new biases)
+        for _ in 0..count {
+            let new_weights: Vec<f64> = (0..input_size)
+                .map(|_| gaussian(rng, std_dev) * 0.1) // Small initial weights
+                .collect();
+            layer.weights.push(new_weights);
+            layer.biases.push(0.0);
+        }
+
+        // Update next layer to accept more inputs
+        if layer_idx + 1 < self.layers.len() {
+            let next_layer = &mut self.layers[layer_idx + 1];
+            let next_std_dev = (2.0 / next_layer.input_size() as f64).sqrt();
+
+            for row in &mut next_layer.weights {
+                for _ in 0..count {
+                    row.push(gaussian(rng, next_std_dev) * 0.1); // Small initial weights
+                }
+            }
+        }
+    }
+
+    /// Add a new hidden layer before the output layer
+    fn add_hidden_layer(&mut self, size: usize, rng: &mut StdRng) {
+        if self.layers.is_empty() {
+            return;
+        }
+
+        let output_layer_idx = self.layers.len() - 1;
+        let prev_size = if output_layer_idx > 0 {
+            self.layers[output_layer_idx - 1].output_size()
+        } else {
+            self.layers[0].input_size()
+        };
+
+        // Create new hidden layer
+        let new_layer = Layer::new(prev_size, size, rng);
+
+        // Create new output layer that takes input from new hidden layer
+        let output_size = self.layers[output_layer_idx].output_size();
+        let new_output_layer = Layer::new(size, output_size, rng);
+
+        // Replace output layer with: new_hidden -> new_output
+        self.layers.pop(); // Remove old output
+        self.layers.push(new_layer);
+        self.layers.push(new_output_layer);
     }
 
     fn activate(&self, x: f64) -> f64 {
@@ -169,20 +270,39 @@ impl NeuralNetwork {
         }
     }
 
+    /// Crossover two networks - handles different architectures
     pub fn crossover(&self, other: &NeuralNetwork, rng: &mut StdRng) -> NeuralNetwork {
-        let mut child = self.clone();
+        let self_sizes = self.hidden_layer_sizes();
+        let other_sizes = other.hidden_layer_sizes();
 
-        let self_weights = self.get_weights_flat();
-        let other_weights = other.get_weights_flat();
+        // If same architecture, do standard crossover
+        if self_sizes == other_sizes {
+            let mut child = self.clone();
+            let self_weights = self.get_weights_flat();
+            let other_weights = other.get_weights_flat();
 
-        let child_weights: Vec<f64> = self_weights
-            .iter()
-            .zip(&other_weights)
-            .map(|(a, b)| if rng.gen::<bool>() { *a } else { *b })
-            .collect();
+            let child_weights: Vec<f64> = self_weights
+                .iter()
+                .zip(&other_weights)
+                .map(|(a, b)| if rng.gen::<bool>() { *a } else { *b })
+                .collect();
 
-        child.set_weights_flat(&child_weights);
-        child
+            child.set_weights_flat(&child_weights);
+            return child;
+        }
+
+        // Different architectures: child inherits from one parent randomly
+        // with slight preference for the fitter (assumed to be self)
+        if rng.gen::<f64>() < 0.6 {
+            self.clone()
+        } else {
+            other.clone()
+        }
+    }
+
+    /// Get total number of neurons in hidden layers (complexity measure)
+    pub fn complexity(&self) -> usize {
+        self.hidden_layer_sizes().iter().sum()
     }
 }
 

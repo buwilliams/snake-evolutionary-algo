@@ -126,7 +126,17 @@ fn train(config_path: Option<&str>, output_path: &str) {
     println!("  Population: {}", config.evolution.population_size);
     println!("  Generations: {}", config.training.generations);
     println!("  Games per evaluation: {}", config.training.games_per_evaluation);
-    println!("  Hidden layers: {:?}", config.network.hidden_layers);
+    if config.growth.enabled {
+        println!("  Network growth: ENABLED");
+        println!("    Start: {} layers, {}-{} neurons each",
+            config.growth.start_layers,
+            config.growth.min_start_neurons,
+            config.growth.max_start_neurons);
+        println!("    Growth threshold: score >= {}", config.growth.growth_score_threshold);
+        println!("    Plateau detection: {} generations", config.growth.plateau_generations);
+    } else {
+        println!("  Hidden layers: {:?}", config.network.hidden_layers);
+    }
     println!("  Mutation rate: {}", config.evolution.mutation_rate);
     println!("  Crossover rate: {}", config.evolution.crossover_rate);
     println!();
@@ -176,10 +186,14 @@ fn train(config_path: Option<&str>, output_path: &str) {
 
         let gen_elapsed = gen_start.elapsed();
         if gen % 50 == 0 && gen > 0 {
+            let (min_complexity, max_complexity, avg_complexity) = population.network_stats();
             println!(
-                "  -> Gen {} completed in {:.2}s",
+                "  -> Gen {} completed in {:.2}s | Networks: min={} max={} avg={:.0}",
                 gen,
-                gen_elapsed.as_secs_f64()
+                gen_elapsed.as_secs_f64(),
+                min_complexity,
+                max_complexity,
+                avg_complexity
             );
         }
     }

@@ -108,11 +108,42 @@ impl Default for TrainingConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GrowthConfig {
+    pub enabled: bool,
+    pub min_start_neurons: usize,      // Minimum neurons per layer at start
+    pub max_start_neurons: usize,      // Maximum neurons per layer at start
+    pub start_layers: usize,           // Number of hidden layers at start
+    pub growth_score_threshold: usize, // Score required to trigger growth
+    pub growth_probability: f64,       // Probability of growth when threshold met
+    pub plateau_generations: usize,    // Generations without improvement before floor increase
+    pub max_neurons_per_layer: usize,  // Cap on layer size
+    pub max_hidden_layers: usize,      // Cap on depth
+}
+
+impl Default for GrowthConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            min_start_neurons: 16,
+            max_start_neurons: 32,
+            start_layers: 1,
+            growth_score_threshold: 3,
+            growth_probability: 0.3,
+            plateau_generations: 500,
+            max_neurons_per_layer: 128,
+            max_hidden_layers: 4,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub game: GameConfig,
     pub network: NetworkConfig,
     pub evolution: EvolutionConfig,
     pub training: TrainingConfig,
+    #[serde(default)]
+    pub growth: GrowthConfig,
 }
 
 impl Default for Config {
@@ -124,6 +155,7 @@ impl Default for Config {
             network,
             evolution: EvolutionConfig::default(),
             training: TrainingConfig::default(),
+            growth: GrowthConfig::default(),
         }
     }
 }
