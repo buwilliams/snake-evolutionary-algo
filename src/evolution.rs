@@ -5,6 +5,7 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::Rng;
 use rand::SeedableRng;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,51 +157,59 @@ impl Population {
     }
 
     /// Run competitive evaluation: shuffle agents into groups, compete for food
+    /// Uses rayon for parallel evaluation across CPU cores
     pub fn evaluate_competitive(&mut self, base_seed: u64) {
         let mut rng = StdRng::seed_from_u64(base_seed.wrapping_add(self.generation as u64 * 10000));
         let snakes_per_game = self.config.game.snakes_per_game;
+        let rounds = self.config.training.games_per_evaluation;
 
         // Reset all fitness scores
         for agent in &mut self.agents {
             agent.fitness = 0.0;
         }
 
-        // Create shuffled indices for grouping
-        let mut indices: Vec<usize> = (0..self.agents.len()).collect();
-        indices.shuffle(&mut rng);
-
-        // Run multiple rounds of competition
-        let rounds = self.config.training.games_per_evaluation;
-        let mut generation_best_score = 0;
-        let mut generation_best_seed = 0;
-        let mut generation_best_agent_idx = 0;
+        // Build all competition tasks: (agent_indices, seed)
+        let mut competitions: Vec<(Vec<usize>, u64)> = Vec::new();
 
         for round in 0..rounds {
-            // Reshuffle each round for variety
+            // Create shuffled indices for this round
+            let mut indices: Vec<usize> = (0..self.agents.len()).collect();
             indices.shuffle(&mut rng);
 
-            // Group agents into competitions
+            // Group into competitions
             for chunk in indices.chunks(snakes_per_game) {
                 let game_seed = base_seed
                     .wrapping_add(self.generation as u64 * 10000)
                     .wrapping_add(round as u64 * 1000)
                     .wrapping_add(chunk[0] as u64);
 
-                // Run the competition
-                let scores = self.run_competition(chunk, game_seed);
+                competitions.push((chunk.to_vec(), game_seed));
+            }
+        }
 
-                // Update fitness based on competition results
-                for (i, &agent_idx) in chunk.iter().enumerate() {
-                    let score = scores[i];
-                    // Fitness is simply the score (food eaten)
-                    self.agents[agent_idx].fitness += score as f64;
+        // Run all competitions in parallel
+        let results: Vec<(Vec<usize>, Vec<usize>, u64)> = competitions
+            .par_iter()
+            .map(|(agent_indices, seed)| {
+                let scores = self.run_competition(agent_indices, *seed);
+                (agent_indices.clone(), scores, *seed)
+            })
+            .collect();
 
-                    // Track best score
-                    if score > generation_best_score {
-                        generation_best_score = score;
-                        generation_best_seed = game_seed;
-                        generation_best_agent_idx = agent_idx;
-                    }
+        // Apply results and track best score
+        let mut generation_best_score = 0;
+        let mut generation_best_seed = 0;
+        let mut generation_best_agent_idx = 0;
+
+        for (agent_indices, scores, seed) in results {
+            for (i, &agent_idx) in agent_indices.iter().enumerate() {
+                let score = scores[i];
+                self.agents[agent_idx].fitness += score as f64;
+
+                if score > generation_best_score {
+                    generation_best_score = score;
+                    generation_best_seed = seed;
+                    generation_best_agent_idx = agent_idx;
                 }
             }
         }

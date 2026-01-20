@@ -1,0 +1,35 @@
+{
+  "game": {
+    "grid_width": 8,
+    "grid_height": 8,
+    "starting_energy": 100,
+    "energy_per_food": 75,
+    "energy_decay_per_score": 5,
+    "minimum_energy_per_food": 20,
+    "snakes_per_game": 5
+  },
+  "network": {
+    "input_size": 68,
+    "hidden_layers": [
+      256,
+      128,
+      64
+    ],
+    "output_size": 4,
+    "activation": "ReLU"
+  },
+  "evolution": {
+    "population_size": 500,
+    "tournament_size": 5,
+    "elitism_count": 10,
+    "mutation_rate": 0.1,
+    "mutation_strength": 0.3,
+    "crossover_rate": 0.7
+  },
+  "training": {
+    "generations": 20000,
+    "games_per_evaluation": 3,
+    "save_interval": 50,
+    "seed": null
+  }
+}
