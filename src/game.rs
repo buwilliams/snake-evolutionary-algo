@@ -475,9 +475,9 @@ impl CompetitiveGame {
             self.spawn_food();
         }
 
-        // Check if game is over (0 or 1 snake left)
+        // Check if game is over (all snakes dead)
         let alive_count = self.snakes.iter().filter(|s| s.alive).count();
-        if alive_count <= 1 {
+        if alive_count == 0 {
             self.game_over = true;
         }
     }
