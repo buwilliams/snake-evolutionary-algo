@@ -61,12 +61,12 @@ fn main() {
         }
         "replay-record" => {
             if args.len() < 3 {
-                eprintln!("Usage: snake-evolutionary-algo replay-record <agent.json> [max_frames]");
+                eprintln!("Usage: snake-evolutionary-algo replay-record <agent.json> [delay_ms]");
                 return;
             }
             let agent_path = &args[2];
-            let max_frames = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(200);
-            replay_record(agent_path, max_frames);
+            let delay_ms = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(150);
+            replay_record(agent_path, delay_ms);
         }
         "continue" => {
             if args.len() < 3 {
@@ -324,7 +324,7 @@ fn replay(agent_path: &str, max_frames: usize, seed_opt: Option<u64>) {
     println!("Final Score: {}, Steps: {}", game.score, game.steps);
 }
 
-fn replay_record(agent_path: &str, max_frames: usize) {
+fn replay_record(agent_path: &str, delay_ms: u64) {
     let saved = match SavedAgent::load(agent_path) {
         Ok(s) => s,
         Err(e) => {
@@ -351,24 +351,16 @@ fn replay_record(agent_path: &str, max_frames: usize) {
         }
     };
 
-    println!("Replaying RECORD game (score {}, seed {})\n", saved.best_score, seed);
+    println!("Replaying RECORD game (score {}, seed {})", saved.best_score, seed);
+    println!("Press Ctrl+C to exit\n");
 
-    let mut game = GameState::new(&saved.config.game, seed);
-    let mut frame = 0;
+    let visualizer = Visualizer::new(delay_ms);
 
-    while !game.game_over && frame < max_frames {
-        println!("Step {:3} | Score: {} | Direction: {:?}", frame, game.score, game.direction);
-        print_grid(&game);
-        println!();
-
-        let input = game.to_network_input();
-        let direction = agent.network.decide(&input);
-        game.step(direction);
-        frame += 1;
+    if let Err(e) = visualizer.watch_agent(&agent, &saved.config, seed) {
+        eprintln!("Visualization error: {}", e);
     }
 
-    println!("=== {} ===", if game.game_over { "GAME OVER" } else { "TRUNCATED" });
-    println!("Final Score: {}, Steps: {}", game.score, game.steps);
+    let _ = visualizer.cleanup();
 }
 
 fn print_grid(game: &GameState) {

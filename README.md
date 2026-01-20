@@ -38,7 +38,7 @@ cargo run --release -- benchmark best_agent.json 1000
 | `watch <agent.json> [delay_ms]` | Visualize agent playing (default 100ms) |
 | `benchmark <agent.json> [games]` | Run performance benchmark |
 | `replay <agent.json> [frames] [seed]` | Text-based game replay |
-| `replay-record <agent.json> [frames]` | Replay the record-setting game |
+| `replay-record <agent.json> [delay_ms]` | Watch the record-setting game |
 | `generate-config [output.json]` | Generate default config file |
 
 ## How It Works
