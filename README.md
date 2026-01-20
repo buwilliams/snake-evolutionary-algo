@@ -182,6 +182,63 @@ Two trained agents are included:
 - `best_agent.json` - Generation 499 (55s training)
 - `best_agent_continued.json` - Generation 999 (196s total training)
 
+## Future Improvements
+
+The current implementation reaches a practical ceiling around score 8-15. To achieve human-level play (30+), consider these improvements:
+
+### Input Encoding
+
+| Improvement | Description |
+|-------------|-------------|
+| **Raycast sensors** | Distance to wall/body/food in 8 directions (24 inputs vs 64 grid) |
+| **Relative coordinates** | Food position relative to head, not absolute grid |
+| **Body density map** | Convolution-friendly representation of nearby danger |
+| **Path availability** | Binary flags for which directions are safe 1-3 moves ahead |
+
+### Network Architecture
+
+| Improvement | Description |
+|-------------|-------------|
+| **Larger networks** | [128, 64, 32] or deeper for complex spatial reasoning |
+| **NEAT** | Evolve topology alongside weights (NeuroEvolution of Augmenting Topologies) |
+| **Recurrent layers** | LSTM/GRU for memory of recent moves and planning |
+| **Attention mechanism** | Focus on relevant grid regions |
+
+### Training Strategies
+
+| Improvement | Description |
+|-------------|-------------|
+| **Curriculum learning** | Start on 4x4 grid, gradually increase to 8x8, 16x16 |
+| **Novelty search** | Reward behavioral diversity, not just fitness |
+| **Coevolution** | Compete agents against each other |
+| **Parallel islands** | Multiple populations with occasional migration |
+| **Adaptive mutation** | Decrease mutation rate as fitness plateaus |
+
+### Game Mechanics
+
+| Improvement | Description |
+|-------------|-------------|
+| **Wrapped edges** | Snake wraps around instead of wall death (easier learning) |
+| **Growing grid** | Start small, expand as score increases |
+| **Multiple food** | Several food items visible at once |
+
+### Performance
+
+| Improvement | Description |
+|-------------|-------------|
+| **Rayon parallelism** | Evaluate agents in parallel across CPU cores |
+| **GPU acceleration** | Batch forward passes on GPU |
+| **Speciation** | Protect innovative solutions from competition |
+
+### Metrics & Debugging
+
+| Improvement | Description |
+|-------------|-------------|
+| **Heatmaps** | Visualize where agents die most often |
+| **Decision logging** | Record network activations for analysis |
+| **Fitness components** | Track score vs survival contributions separately |
+| **Generational diversity** | Monitor genetic diversity to detect premature convergence |
+
 ## License
 
 MIT
