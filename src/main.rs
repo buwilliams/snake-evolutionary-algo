@@ -59,6 +59,15 @@ fn main() {
             let seed = args.get(4).and_then(|s| s.parse().ok());
             replay(agent_path, max_frames, seed);
         }
+        "replay-record" => {
+            if args.len() < 3 {
+                eprintln!("Usage: snake-evolutionary-algo replay-record <agent.json> [max_frames]");
+                return;
+            }
+            let agent_path = &args[2];
+            let max_frames = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(200);
+            replay_record(agent_path, max_frames);
+        }
         "continue" => {
             if args.len() < 3 {
                 eprintln!("Usage: snake-evolutionary-algo continue <agent.json> [output.json] [generations]");
@@ -83,6 +92,7 @@ fn print_usage() {
     println!("  snake-evolutionary-algo watch <agent.json> [delay_ms]");
     println!("  snake-evolutionary-algo benchmark <agent.json> [games]");
     println!("  snake-evolutionary-algo replay <agent.json> [max_frames] [seed]");
+    println!("  snake-evolutionary-algo replay-record <agent.json> [max_frames]");
     println!("  snake-evolutionary-algo generate-config [output.json]");
     println!("\nExamples:");
     println!("  cargo run --release -- train");
@@ -150,7 +160,7 @@ fn train(config_path: Option<&str>, output_path: &str) {
         // Save checkpoint
         if gen % config.training.save_interval == 0 || gen == config.training.generations - 1 {
             if let Some(best) = population.best_agent() {
-                let saved = SavedAgent::new(best, gen, population.best_score_ever, &config);
+                let saved = SavedAgent::new(best, gen, population.best_score_ever, population.best_score_seed, population.record_agent.as_ref(), &config);
                 if let Err(e) = saved.save(output_path) {
                     eprintln!("Warning: Failed to save agent: {}", e);
                 } else if gen % config.training.save_interval == 0 {
@@ -186,7 +196,10 @@ fn train(config_path: Option<&str>, output_path: &str) {
     if let Some(best) = population.best_agent() {
         println!("Best agent fitness: {:.2}", best.fitness);
         println!("Best score record: {}", population.best_score_ever);
-        let saved = SavedAgent::new(best, config.training.generations - 1, population.best_score_ever, &config);
+        if let Some(seed) = population.best_score_seed {
+            println!("Best score seed: {} (use with replay command)", seed);
+        }
+        let saved = SavedAgent::new(best, config.training.generations - 1, population.best_score_ever, population.best_score_seed, population.record_agent.as_ref(), &config);
         if let Err(e) = saved.save(output_path) {
             eprintln!("Failed to save final agent: {}", e);
         } else {
@@ -311,6 +324,53 @@ fn replay(agent_path: &str, max_frames: usize, seed_opt: Option<u64>) {
     println!("Final Score: {}, Steps: {}", game.score, game.steps);
 }
 
+fn replay_record(agent_path: &str, max_frames: usize) {
+    let saved = match SavedAgent::load(agent_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to load agent from {}: {}", agent_path, e);
+            return;
+        }
+    };
+
+    let seed = match saved.best_score_seed {
+        Some(s) => s,
+        None => {
+            eprintln!("No record seed saved in this agent file.");
+            eprintln!("Train a new agent to track the record seed.");
+            return;
+        }
+    };
+
+    let agent = match saved.record_agent() {
+        Some(a) => a,
+        None => {
+            eprintln!("No record agent saved in this agent file.");
+            eprintln!("Train a new agent to track the record-setting agent.");
+            return;
+        }
+    };
+
+    println!("Replaying RECORD game (score {}, seed {})\n", saved.best_score, seed);
+
+    let mut game = GameState::new(&saved.config.game, seed);
+    let mut frame = 0;
+
+    while !game.game_over && frame < max_frames {
+        println!("Step {:3} | Score: {} | Direction: {:?}", frame, game.score, game.direction);
+        print_grid(&game);
+        println!();
+
+        let input = game.to_network_input();
+        let direction = agent.network.decide(&input);
+        game.step(direction);
+        frame += 1;
+    }
+
+    println!("=== {} ===", if game.game_over { "GAME OVER" } else { "TRUNCATED" });
+    println!("Final Score: {}, Steps: {}", game.score, game.steps);
+}
+
 fn print_grid(game: &GameState) {
     let width = game.width;
     println!("+{}+", "-".repeat(width * 2 + 1));
@@ -362,7 +422,7 @@ fn continue_training(agent_path: &str, output_path: &str, generations: usize) {
 
     let mut rng = StdRng::seed_from_u64(seed);
     let start_gen = saved.generation + 1;
-    let mut population = Population::from_agent(saved.to_agent(), start_gen, saved.best_score, config.clone(), &mut rng);
+    let mut population = Population::from_agent(saved.to_agent(), start_gen, saved.best_score, saved.best_score_seed, saved.record_agent(), config.clone(), &mut rng);
 
     let start_time = Instant::now();
 
@@ -383,7 +443,7 @@ fn continue_training(agent_path: &str, output_path: &str, generations: usize) {
         // Save checkpoint
         if gen % config.training.save_interval == 0 || gen == generations - 1 {
             if let Some(best) = population.best_agent() {
-                let saved = SavedAgent::new(best, actual_gen, population.best_score_ever, &config);
+                let saved = SavedAgent::new(best, actual_gen, population.best_score_ever, population.best_score_seed, population.record_agent.as_ref(), &config);
                 if let Err(e) = saved.save(output_path) {
                     eprintln!("Warning: Failed to save agent: {}", e);
                 } else if gen % config.training.save_interval == 0 {
@@ -419,7 +479,10 @@ fn continue_training(agent_path: &str, output_path: &str, generations: usize) {
     if let Some(best) = population.best_agent() {
         println!("Best agent fitness: {:.2}", best.fitness);
         println!("Best score record: {}", population.best_score_ever);
-        let saved = SavedAgent::new(best, start_gen + generations - 1, population.best_score_ever, &config);
+        if let Some(seed) = population.best_score_seed {
+            println!("Best score seed: {} (use with replay command)", seed);
+        }
+        let saved = SavedAgent::new(best, start_gen + generations - 1, population.best_score_ever, population.best_score_seed, population.record_agent.as_ref(), &config);
         if let Err(e) = saved.save(output_path) {
             eprintln!("Failed to save final agent: {}", e);
         } else {

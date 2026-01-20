@@ -45,19 +45,24 @@ impl Agent {
         }
     }
 
-    pub fn evaluate(&mut self, config: &Config, base_seed: u64, best_score: usize) -> usize {
+    /// Returns (max_score, seed_of_best_game)
+    pub fn evaluate(&mut self, config: &Config, base_seed: u64, best_score: usize) -> (usize, u64) {
         let mut total_fitness = 0.0;
         let mut max_score = 0;
+        let mut best_seed = base_seed;
 
         for i in 0..config.training.games_per_evaluation {
             let seed = base_seed.wrapping_add(i as u64 * 1000);
             let result = self.play_game(config, seed, best_score);
             total_fitness += result.fitness;
-            max_score = max_score.max(result.score);
+            if result.score > max_score {
+                max_score = result.score;
+                best_seed = seed;
+            }
         }
 
         self.fitness = total_fitness / config.training.games_per_evaluation as f64;
-        max_score
+        (max_score, best_seed)
     }
 }
 
@@ -91,7 +96,9 @@ pub struct PopulationStats {
 pub struct Population {
     pub agents: Vec<Agent>,
     pub generation: usize,
-    pub best_score_ever: usize,  // The record to beat
+    pub best_score_ever: usize,         // The record to beat
+    pub best_score_seed: Option<u64>,   // Seed of the game that set the record
+    pub record_agent: Option<Agent>,    // The agent that set the record
     config: Config,
 }
 
@@ -105,13 +112,15 @@ impl Population {
             agents,
             generation: 0,
             best_score_ever: 0,
+            best_score_seed: None,
+            record_agent: None,
             config,
         }
     }
 
     /// Create a population seeded from an existing agent
     /// The first agent is the original, the rest are mutations of it
-    pub fn from_agent(agent: Agent, start_generation: usize, best_score: usize, config: Config, rng: &mut StdRng) -> Self {
+    pub fn from_agent(agent: Agent, start_generation: usize, best_score: usize, best_score_seed: Option<u64>, record_agent: Option<Agent>, config: Config, rng: &mut StdRng) -> Self {
         let mut agents = Vec::with_capacity(config.evolution.population_size);
 
         // Keep the original agent
@@ -133,6 +142,8 @@ impl Population {
             agents,
             generation: start_generation,
             best_score_ever: best_score,
+            best_score_seed,
+            record_agent,
             config,
         }
     }
@@ -140,17 +151,25 @@ impl Population {
     pub fn evaluate(&mut self, base_seed: u64) {
         let seed_offset = self.generation as u64 * 10000;
         let mut generation_best_score = 0;
+        let mut generation_best_seed = 0;
+        let mut generation_best_agent_idx = 0;
 
         for (i, agent) in self.agents.iter_mut().enumerate() {
             let agent_seed = base_seed.wrapping_add(seed_offset).wrapping_add(i as u64);
-            let agent_best = agent.evaluate(&self.config, agent_seed, self.best_score_ever);
-            generation_best_score = generation_best_score.max(agent_best);
+            let (agent_best, best_game_seed) = agent.evaluate(&self.config, agent_seed, self.best_score_ever);
+            if agent_best > generation_best_score {
+                generation_best_score = agent_best;
+                generation_best_seed = best_game_seed;
+                generation_best_agent_idx = i;
+            }
         }
 
         // Update the record if beaten
         if generation_best_score > self.best_score_ever {
-            println!("  *** NEW RECORD: {} (was {}) ***", generation_best_score, self.best_score_ever);
+            println!("  *** NEW RECORD: {} (was {}) | Seed: {} ***", generation_best_score, self.best_score_ever, generation_best_seed);
             self.best_score_ever = generation_best_score;
+            self.best_score_seed = Some(generation_best_seed);
+            self.record_agent = Some(self.agents[generation_best_agent_idx].clone());
         }
 
         // Sort by fitness (descending)
@@ -254,18 +273,32 @@ pub struct SavedAgent {
     pub generation: usize,
     #[serde(default)]
     pub best_score: usize,  // The record score at time of save
+    #[serde(default)]
+    pub best_score_seed: Option<u64>,  // Seed of the game that set the record
+    #[serde(default)]
+    pub record_network: Option<NeuralNetwork>,  // Network of the agent that set the record
     pub config: Config,
 }
 
 impl SavedAgent {
-    pub fn new(agent: &Agent, generation: usize, best_score: usize, config: &Config) -> Self {
+    pub fn new(agent: &Agent, generation: usize, best_score: usize, best_score_seed: Option<u64>, record_agent: Option<&Agent>, config: &Config) -> Self {
         Self {
             network: agent.network.clone(),
             fitness: agent.fitness,
             generation,
             best_score,
+            best_score_seed,
+            record_network: record_agent.map(|a| a.network.clone()),
             config: config.clone(),
         }
+    }
+
+    /// Get the agent that set the record, if available
+    pub fn record_agent(&self) -> Option<Agent> {
+        self.record_network.as_ref().map(|network| Agent {
+            network: network.clone(),
+            fitness: 0.0,
+        })
     }
 
     pub fn save(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -425,12 +458,13 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
         let agent = Agent::new(&config.network, &mut rng);
 
-        let saved = SavedAgent::new(&agent, 10, 5, &config);
+        let saved = SavedAgent::new(&agent, 10, 5, Some(12345), Some(&agent), &config);
         let json = serde_json::to_string(&saved).unwrap();
         let restored: SavedAgent = serde_json::from_str(&json).unwrap();
 
         assert_eq!(restored.generation, 10);
         assert_eq!(restored.best_score, 5);
+        assert_eq!(restored.best_score_seed, Some(12345));
         assert_eq!(
             agent.network.get_weights_flat().len(),
             restored.network.get_weights_flat().len()
