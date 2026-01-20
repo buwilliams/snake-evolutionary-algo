@@ -56,28 +56,28 @@ Input (68) → Hidden (64) → Hidden (32) → Output (4)
 
 ### Genetic Algorithm
 
-1. **Evaluate**: Each agent plays 3 games, fitness averaged
+1. **Evaluate**: Agents compete in groups of 5 for shared food
 2. **Select**: Tournament selection (k=5)
 3. **Crossover**: Uniform crossover (70% rate)
 4. **Mutate**: Gaussian noise (10% rate, 0.3 strength)
 5. **Elitism**: Top 10 agents copied unchanged
 
-### Fitness Function
+### Competitive Mode
+
+Instead of playing solo games, agents compete directly:
 
 ```
-base_fitness = (score + 1)² × 10 + steps × 0.1
+5 snakes on same board → 1 food at a time → first to eat wins
 ```
 
-The fitness is then modified based on competitive pressure:
+| Feature | Effect |
+|---------|--------|
+| Shared food | Creates race to eat |
+| No collision | Snakes pass through each other |
+| Energy drain | Slow snakes starve |
+| Fitness = food eaten | Direct selection for speed |
 
-| Condition | Modifier |
-|-----------|----------|
-| Beat the record | base × 3 + 500 |
-| Tied the record | base × 1.5 |
-| Scored 0 (when record > 0) | base × 0.1 |
-| Below record | base × (score / record) |
-
-This competitive system prevents "safe looping" behavior where agents survive without hunting food.
+This creates real evolutionary pressure - random walkers lose every race and starve. Only efficient hunters survive.
 
 ### Energy System
 

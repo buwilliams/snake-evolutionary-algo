@@ -8,6 +8,7 @@ pub struct GameConfig {
     pub energy_per_food: usize,
     pub energy_decay_per_score: usize,  // Energy gain decreases as score increases
     pub minimum_energy_per_food: usize, // Floor for energy gain
+    pub snakes_per_game: usize,         // Number of snakes competing for food
 }
 
 impl Default for GameConfig {
@@ -19,6 +20,7 @@ impl Default for GameConfig {
             energy_per_food: 75,
             energy_decay_per_score: 5,   // Lose 5 energy gain per score
             minimum_energy_per_food: 20, // Never less than 20
+            snakes_per_game: 5,          // 5 snakes compete for food
         }
     }
 }

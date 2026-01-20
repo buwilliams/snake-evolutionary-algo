@@ -1,8 +1,10 @@
 use crate::config::{Config, NetworkConfig};
-use crate::game::GameState;
+use crate::game::{CompetitiveGame, Direction, GameState};
 use crate::neural_network::NeuralNetwork;
 use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
 use rand::Rng;
+use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,19 +151,63 @@ impl Population {
     }
 
     pub fn evaluate(&mut self, base_seed: u64) {
-        let seed_offset = self.generation as u64 * 10000;
+        // Use competitive evaluation
+        self.evaluate_competitive(base_seed);
+    }
+
+    /// Run competitive evaluation: shuffle agents into groups, compete for food
+    pub fn evaluate_competitive(&mut self, base_seed: u64) {
+        let mut rng = StdRng::seed_from_u64(base_seed.wrapping_add(self.generation as u64 * 10000));
+        let snakes_per_game = self.config.game.snakes_per_game;
+
+        // Reset all fitness scores
+        for agent in &mut self.agents {
+            agent.fitness = 0.0;
+        }
+
+        // Create shuffled indices for grouping
+        let mut indices: Vec<usize> = (0..self.agents.len()).collect();
+        indices.shuffle(&mut rng);
+
+        // Run multiple rounds of competition
+        let rounds = self.config.training.games_per_evaluation;
         let mut generation_best_score = 0;
         let mut generation_best_seed = 0;
         let mut generation_best_agent_idx = 0;
 
-        for (i, agent) in self.agents.iter_mut().enumerate() {
-            let agent_seed = base_seed.wrapping_add(seed_offset).wrapping_add(i as u64);
-            let (agent_best, best_game_seed) = agent.evaluate(&self.config, agent_seed, self.best_score_ever);
-            if agent_best > generation_best_score {
-                generation_best_score = agent_best;
-                generation_best_seed = best_game_seed;
-                generation_best_agent_idx = i;
+        for round in 0..rounds {
+            // Reshuffle each round for variety
+            indices.shuffle(&mut rng);
+
+            // Group agents into competitions
+            for chunk in indices.chunks(snakes_per_game) {
+                let game_seed = base_seed
+                    .wrapping_add(self.generation as u64 * 10000)
+                    .wrapping_add(round as u64 * 1000)
+                    .wrapping_add(chunk[0] as u64);
+
+                // Run the competition
+                let scores = self.run_competition(chunk, game_seed);
+
+                // Update fitness based on competition results
+                for (i, &agent_idx) in chunk.iter().enumerate() {
+                    let score = scores[i];
+                    // Fitness is simply the score (food eaten)
+                    self.agents[agent_idx].fitness += score as f64;
+
+                    // Track best score
+                    if score > generation_best_score {
+                        generation_best_score = score;
+                        generation_best_seed = game_seed;
+                        generation_best_agent_idx = agent_idx;
+                    }
+                }
             }
+        }
+
+        // Average fitness over rounds
+        for agent in &mut self.agents {
+            agent.fitness /= rounds as f64;
         }
 
         // Update the record if beaten
@@ -175,6 +221,36 @@ impl Population {
         // Sort by fitness (descending)
         self.agents
             .sort_by(|a, b| b.fitness.partial_cmp(&a.fitness).unwrap());
+    }
+
+    /// Run a single competitive game and return scores for each participant
+    fn run_competition(&self, agent_indices: &[usize], seed: u64) -> Vec<usize> {
+        let num_snakes = agent_indices.len();
+        let mut game = CompetitiveGame::new(&self.config.game, num_snakes, seed);
+
+        // Max steps to prevent infinite games
+        let max_steps = self.config.game.grid_width * self.config.game.grid_height * 10;
+
+        while !game.game_over && game.steps < max_steps {
+            // Get direction from each agent's network
+            let directions: Vec<Direction> = agent_indices
+                .iter()
+                .enumerate()
+                .map(|(snake_idx, &agent_idx)| {
+                    if game.snakes[snake_idx].alive {
+                        let input = game.to_network_input(snake_idx);
+                        self.agents[agent_idx].network.decide(&input)
+                    } else {
+                        Direction::Right // Doesn't matter, snake is dead
+                    }
+                })
+                .collect();
+
+            game.step(&directions);
+        }
+
+        // Return scores for each snake
+        game.snakes.iter().map(|s| s.score).collect()
     }
 
     pub fn tournament_select(&self, rng: &mut StdRng) -> &Agent {
