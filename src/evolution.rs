@@ -27,7 +27,7 @@ impl Agent {
         }
     }
 
-    pub fn play_game(&self, config: &Config, seed: u64) -> GameResult {
+    pub fn play_game(&self, config: &Config, seed: u64, best_score: usize) -> GameResult {
         let mut game = GameState::new(&config.game, seed);
 
         while !game.game_over {
@@ -36,7 +36,7 @@ impl Agent {
             game.step(direction);
         }
 
-        let fitness = calculate_fitness(game.score, game.steps);
+        let fitness = calculate_fitness(game.score, game.steps, best_score);
 
         GameResult {
             score: game.score,
@@ -45,23 +45,38 @@ impl Agent {
         }
     }
 
-    pub fn evaluate(&mut self, config: &Config, base_seed: u64) {
+    pub fn evaluate(&mut self, config: &Config, base_seed: u64, best_score: usize) -> usize {
         let mut total_fitness = 0.0;
+        let mut max_score = 0;
 
         for i in 0..config.training.games_per_evaluation {
             let seed = base_seed.wrapping_add(i as u64 * 1000);
-            let result = self.play_game(config, seed);
+            let result = self.play_game(config, seed, best_score);
             total_fitness += result.fitness;
+            max_score = max_score.max(result.score);
         }
 
         self.fitness = total_fitness / config.training.games_per_evaluation as f64;
+        max_score
     }
 }
 
-pub fn calculate_fitness(score: usize, steps: usize) -> f64 {
-    let score_component = ((score + 1) as f64).powi(2) * 10.0;
-    let steps_component = steps as f64 * 0.1;
-    score_component + steps_component
+pub fn calculate_fitness(score: usize, steps: usize, best_score: usize) -> f64 {
+    let base_fitness = ((score + 1) as f64).powi(2) * 10.0 + steps as f64 * 0.1;
+
+    if score > best_score {
+        // Beat the record! Big bonus
+        base_fitness * 3.0 + 500.0
+    } else if score == best_score && best_score > 0 {
+        // Tied the record - still good
+        base_fitness * 1.5
+    } else if score == 0 && best_score > 0 {
+        // Scored nothing when record exists - heavy penalty
+        base_fitness * 0.1
+    } else {
+        // Below record but scored something
+        base_fitness * (score as f64 / (best_score.max(1) as f64)).max(0.2)
+    }
 }
 
 #[derive(Debug)]
@@ -76,6 +91,7 @@ pub struct PopulationStats {
 pub struct Population {
     pub agents: Vec<Agent>,
     pub generation: usize,
+    pub best_score_ever: usize,  // The record to beat
     config: Config,
 }
 
@@ -88,13 +104,14 @@ impl Population {
         Self {
             agents,
             generation: 0,
+            best_score_ever: 0,
             config,
         }
     }
 
     /// Create a population seeded from an existing agent
     /// The first agent is the original, the rest are mutations of it
-    pub fn from_agent(agent: Agent, start_generation: usize, config: Config, rng: &mut StdRng) -> Self {
+    pub fn from_agent(agent: Agent, start_generation: usize, best_score: usize, config: Config, rng: &mut StdRng) -> Self {
         let mut agents = Vec::with_capacity(config.evolution.population_size);
 
         // Keep the original agent
@@ -115,16 +132,25 @@ impl Population {
         Self {
             agents,
             generation: start_generation,
+            best_score_ever: best_score,
             config,
         }
     }
 
     pub fn evaluate(&mut self, base_seed: u64) {
         let seed_offset = self.generation as u64 * 10000;
+        let mut generation_best_score = 0;
 
         for (i, agent) in self.agents.iter_mut().enumerate() {
             let agent_seed = base_seed.wrapping_add(seed_offset).wrapping_add(i as u64);
-            agent.evaluate(&self.config, agent_seed);
+            let agent_best = agent.evaluate(&self.config, agent_seed, self.best_score_ever);
+            generation_best_score = generation_best_score.max(agent_best);
+        }
+
+        // Update the record if beaten
+        if generation_best_score > self.best_score_ever {
+            println!("  *** NEW RECORD: {} (was {}) ***", generation_best_score, self.best_score_ever);
+            self.best_score_ever = generation_best_score;
         }
 
         // Sort by fitness (descending)
@@ -193,17 +219,12 @@ impl Population {
         let average_fitness: f64 =
             self.agents.iter().map(|a| a.fitness).sum::<f64>() / self.agents.len() as f64;
 
-        // To get scores, we need to play games again or track them
-        // For simplicity, we estimate based on fitness
-        let best_score = estimate_score_from_fitness(best_fitness);
-        let average_score = estimate_score_from_fitness_f64(average_fitness);
-
         PopulationStats {
             generation: self.generation,
             best_fitness,
             average_fitness,
-            best_score,
-            average_score,
+            best_score: self.best_score_ever,
+            average_score: estimate_score_from_fitness_f64(average_fitness),
         }
     }
 
@@ -231,15 +252,18 @@ pub struct SavedAgent {
     pub network: NeuralNetwork,
     pub fitness: f64,
     pub generation: usize,
+    #[serde(default)]
+    pub best_score: usize,  // The record score at time of save
     pub config: Config,
 }
 
 impl SavedAgent {
-    pub fn new(agent: &Agent, generation: usize, config: &Config) -> Self {
+    pub fn new(agent: &Agent, generation: usize, best_score: usize, config: &Config) -> Self {
         Self {
             network: agent.network.clone(),
             fitness: agent.fitness,
             generation,
+            best_score,
             config: config.clone(),
         }
     }
@@ -275,11 +299,22 @@ mod tests {
 
     #[test]
     fn test_fitness_calculation() {
-        // Score 0, 10 steps: (0+1)^2 * 10 + 10 * 0.1 = 10 + 1 = 11
-        assert!((calculate_fitness(0, 10) - 11.0).abs() < 1e-10);
+        // Score 0, 10 steps, best_score=0: falls through to else case (0.2 multiplier)
+        let fitness = calculate_fitness(0, 10, 0);
+        assert!(fitness > 0.0);
 
-        // Score 2, 50 steps: (2+1)^2 * 10 + 50 * 0.1 = 90 + 5 = 95
-        assert!((calculate_fitness(2, 50) - 95.0).abs() < 1e-10);
+        // Score 1 beats best_score=0: gets record bonus (base * 3 + 500)
+        let fitness = calculate_fitness(1, 20, 0);
+        assert!(fitness > 500.0, "Expected record bonus, got {}", fitness);
+
+        // Score 1 ties best_score=1: gets tie bonus (base * 1.5)
+        let fitness_tie = calculate_fitness(1, 20, 1);
+        let base = (2.0_f64).powi(2) * 10.0 + 2.0; // 42
+        assert!((fitness_tie - base * 1.5).abs() < 1.0);
+
+        // Score 0 with best_score=1: heavy penalty (base * 0.1)
+        let fitness_penalty = calculate_fitness(0, 10, 1);
+        assert!(fitness_penalty < 5.0, "Expected penalty, got {}", fitness_penalty);
     }
 
     #[test]
@@ -288,7 +323,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
         let agent = Agent::new(&config.network, &mut rng);
 
-        let result = agent.play_game(&config, 42);
+        let result = agent.play_game(&config, 42, 0);
 
         assert!(result.fitness > 0.0);
         assert!(result.steps > 0);
@@ -377,7 +412,7 @@ mod tests {
 
         for i in 0..100 {
             let agent = Agent::new(&config.network, &mut rng);
-            let result = agent.play_game(&config, i);
+            let result = agent.play_game(&config, i, 0);
 
             assert!(result.fitness > 0.0, "Game {} had zero fitness", i);
             assert!(result.steps > 0, "Game {} had zero steps", i);
@@ -390,11 +425,12 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
         let agent = Agent::new(&config.network, &mut rng);
 
-        let saved = SavedAgent::new(&agent, 10, &config);
+        let saved = SavedAgent::new(&agent, 10, 5, &config);
         let json = serde_json::to_string(&saved).unwrap();
         let restored: SavedAgent = serde_json::from_str(&json).unwrap();
 
         assert_eq!(restored.generation, 10);
+        assert_eq!(restored.best_score, 5);
         assert_eq!(
             agent.network.get_weights_flat().len(),
             restored.network.get_weights_flat().len()

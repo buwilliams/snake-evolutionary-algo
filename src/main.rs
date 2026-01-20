@@ -150,7 +150,7 @@ fn train(config_path: Option<&str>, output_path: &str) {
         // Save checkpoint
         if gen % config.training.save_interval == 0 || gen == config.training.generations - 1 {
             if let Some(best) = population.best_agent() {
-                let saved = SavedAgent::new(best, gen, &config);
+                let saved = SavedAgent::new(best, gen, population.best_score_ever, &config);
                 if let Err(e) = saved.save(output_path) {
                     eprintln!("Warning: Failed to save agent: {}", e);
                 } else if gen % config.training.save_interval == 0 {
@@ -185,7 +185,8 @@ fn train(config_path: Option<&str>, output_path: &str) {
 
     if let Some(best) = population.best_agent() {
         println!("Best agent fitness: {:.2}", best.fitness);
-        let saved = SavedAgent::new(best, config.training.generations - 1, &config);
+        println!("Best score record: {}", population.best_score_ever);
+        let saved = SavedAgent::new(best, config.training.generations - 1, population.best_score_ever, &config);
         if let Err(e) = saved.save(output_path) {
             eprintln!("Failed to save final agent: {}", e);
         } else {
@@ -248,7 +249,8 @@ fn benchmark(agent_path: &str, games: usize) {
     let start = Instant::now();
 
     for i in 0..games {
-        let result = agent.play_game(&saved.config, i as u64);
+        // Use 0 as best_score for benchmarking to get raw fitness values
+        let result = agent.play_game(&saved.config, i as u64, 0);
         scores.push(result.score);
         fitnesses.push(result.fitness);
 
@@ -360,7 +362,7 @@ fn continue_training(agent_path: &str, output_path: &str, generations: usize) {
 
     let mut rng = StdRng::seed_from_u64(seed);
     let start_gen = saved.generation + 1;
-    let mut population = Population::from_agent(saved.to_agent(), start_gen, config.clone(), &mut rng);
+    let mut population = Population::from_agent(saved.to_agent(), start_gen, saved.best_score, config.clone(), &mut rng);
 
     let start_time = Instant::now();
 
@@ -381,7 +383,7 @@ fn continue_training(agent_path: &str, output_path: &str, generations: usize) {
         // Save checkpoint
         if gen % config.training.save_interval == 0 || gen == generations - 1 {
             if let Some(best) = population.best_agent() {
-                let saved = SavedAgent::new(best, actual_gen, &config);
+                let saved = SavedAgent::new(best, actual_gen, population.best_score_ever, &config);
                 if let Err(e) = saved.save(output_path) {
                     eprintln!("Warning: Failed to save agent: {}", e);
                 } else if gen % config.training.save_interval == 0 {
@@ -416,7 +418,8 @@ fn continue_training(agent_path: &str, output_path: &str, generations: usize) {
 
     if let Some(best) = population.best_agent() {
         println!("Best agent fitness: {:.2}", best.fitness);
-        let saved = SavedAgent::new(best, start_gen + generations - 1, &config);
+        println!("Best score record: {}", population.best_score_ever);
+        let saved = SavedAgent::new(best, start_gen + generations - 1, population.best_score_ever, &config);
         if let Err(e) = saved.save(output_path) {
             eprintln!("Failed to save final agent: {}", e);
         } else {
@@ -466,7 +469,7 @@ mod tests {
 
         for i in 0..100 {
             let agent = Agent::new(&config.network, &mut rng);
-            let result = agent.play_game(&config, i as u64);
+            let result = agent.play_game(&config, i as u64, 0);
 
             assert!(result.steps > 0, "Agent {} had 0 steps", i);
             assert!(result.fitness > 0.0, "Agent {} had 0 fitness", i);

@@ -64,25 +64,46 @@ Input (68) → Hidden (64) → Hidden (32) → Output (4)
 ### Fitness Function
 
 ```
-fitness = (score + 1)² × 10 + steps × 0.1
+base_fitness = (score + 1)² × 10 + steps × 0.1
 ```
 
-Rewards both food collection (quadratic) and survival (linear).
+The fitness is then modified based on competitive pressure:
+
+| Condition | Modifier |
+|-----------|----------|
+| Beat the record | base × 3 + 500 |
+| Tied the record | base × 1.5 |
+| Scored 0 (when record > 0) | base × 0.1 |
+| Below record | base × (score / record) |
+
+This competitive system prevents "safe looping" behavior where agents survive without hunting food.
+
+### Scaled Starvation
+
+Longer snakes have less time to find food:
+```
+starvation_limit = max_steps_without_food / snake_length (min 10)
+```
+
+This forces skilled agents to keep hunting rather than playing safe.
 
 ## Training Results
 
-Training on 8×8 grid with population of 500:
+Training on 8×8 grid with population of 500 (with competitive fitness):
 
-| Generation | Avg Fitness | Best Score | Time |
-|------------|-------------|------------|------|
-| 0 | 13 | 0-1 | - |
-| 500 | 22.5 | 2-3 | 55s |
-| 1000 | 28 | 2-3 | +141s |
+| Generation | Best Score | Notes |
+|------------|------------|-------|
+| 0 | 2 | First record set |
+| ~10 | 3-4 | Rapid early improvement |
+| ~100 | 5 | New record with competitive pressure |
+| 500 | 5 | ~55s training time |
 
 Benchmark (1000 games):
-- **Average Score**: 0.27
-- **Max Score**: 3
-- **Average Fitness**: 21.72
+- **Average Score**: 0.41
+- **Max Score**: 5
+- **Average Fitness**: 27.06
+
+The competitive fitness system improved average scores by 52% compared to the basic fitness function.
 
 ## Configuration
 

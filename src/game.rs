@@ -185,8 +185,10 @@ impl GameState {
             self.snake.pop_back();
         }
 
-        // Check starvation
-        if self.steps_since_food >= self.max_steps_without_food {
+        // Check starvation - scales with snake length (longer snake = less time to find food)
+        let starvation_limit = self.max_steps_without_food / self.snake.len().max(1);
+        let starvation_limit = starvation_limit.max(10); // Minimum 10 steps
+        if self.steps_since_food >= starvation_limit {
             self.game_over = true;
         }
     }
