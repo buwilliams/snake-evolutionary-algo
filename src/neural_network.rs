@@ -1,6 +1,7 @@
 use crate::config::{ActivationType, NetworkConfig};
 use crate::game::Direction;
 use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
@@ -97,28 +98,50 @@ impl NeuralNetwork {
     /// Grow the network by adding neurons to an existing layer or adding a new layer
     /// Returns true if growth occurred
     pub fn grow(&mut self, rng: &mut StdRng) -> bool {
+        self.grow_with_caps(rng, 64, 3) // Default caps
+    }
+
+    /// Grow with explicit caps on neurons per layer and max layers
+    pub fn grow_with_caps(&mut self, rng: &mut StdRng, max_neurons: usize, max_layers: usize) -> bool {
         if self.layers.len() < 2 {
             return false; // Need at least input->output
         }
 
         let hidden_count = self.layers.len() - 1;
 
+        // Check if already at max capacity
+        let all_layers_maxed = self.layers.iter()
+            .take(hidden_count)
+            .all(|l| l.output_size() >= max_neurons);
+
+        if hidden_count >= max_layers && all_layers_maxed {
+            return false; // Can't grow anymore
+        }
+
         // Decide: add neurons to existing layer (70%) or add new layer (30%)
         if hidden_count > 0 && rng.gen::<f64>() < 0.7 {
-            // Add neurons to a random hidden layer
-            let layer_idx = rng.gen_range(0..hidden_count);
-            self.add_neurons_to_layer(layer_idx, 8, rng); // Add 8 neurons
-            true
-        } else if hidden_count < 4 {
-            // Add a new hidden layer (max 4 hidden layers)
-            self.add_hidden_layer(16, rng); // New layer with 16 neurons
-            true
-        } else {
-            // Already at max layers, add neurons instead
-            let layer_idx = rng.gen_range(0..hidden_count);
-            self.add_neurons_to_layer(layer_idx, 8, rng);
-            true
+            // Find a layer that can still grow
+            let growable: Vec<usize> = (0..hidden_count)
+                .filter(|&i| self.layers[i].output_size() < max_neurons)
+                .collect();
+
+            if let Some(&layer_idx) = growable.choose(rng) {
+                let current_size = self.layers[layer_idx].output_size();
+                let neurons_to_add = (max_neurons - current_size).min(4); // Add up to 4
+                if neurons_to_add > 0 {
+                    self.add_neurons_to_layer(layer_idx, neurons_to_add, rng);
+                    return true;
+                }
+            }
         }
+
+        // Try adding a new layer if under the limit
+        if hidden_count < max_layers {
+            self.add_hidden_layer(16.min(max_neurons), rng);
+            return true;
+        }
+
+        false
     }
 
     /// Add neurons to an existing hidden layer
