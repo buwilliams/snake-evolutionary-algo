@@ -78,32 +78,43 @@ The fitness is then modified based on competitive pressure:
 
 This competitive system prevents "safe looping" behavior where agents survive without hunting food.
 
-### Scaled Starvation
+### Energy System
 
-Longer snakes have less time to find food:
+Instead of arbitrary starvation timers, snakes have energy that depletes with movement:
+
 ```
-starvation_limit = max_steps_without_food / snake_length (min 10)
+energy -= 1 per step
+energy += (base - score × decay) per food eaten (minimum floor)
 ```
 
-This forces skilled agents to keep hunting rather than playing safe.
+Default settings: `starting_energy=100`, `base=75`, `decay=5`, `minimum=20`
+
+| Score | Energy per Food | Effect |
+|-------|-----------------|--------|
+| 0 | 75 | Learn basics |
+| 5 | 50 | Must be efficient |
+| 10 | 25 | Must be optimal |
+| 11+ | 20 | Survival mode |
+
+This creates natural curriculum learning - success makes the game harder, forcing increasingly sophisticated play.
 
 ## Training Results
 
-Training on 8×8 grid with population of 500 (with competitive fitness):
+Training on 8×8 grid with population of 500 (energy system + competitive fitness):
 
 | Generation | Best Score | Notes |
 |------------|------------|-------|
 | 0 | 2 | First record set |
-| ~10 | 3-4 | Rapid early improvement |
-| ~100 | 5 | New record with competitive pressure |
-| 500 | 5 | ~55s training time |
+| ~100 | 5 | Early improvement |
+| ~1200 | 6 | Extended training |
+| 2200 | 6 | Current best |
 
 Benchmark (1000 games):
-- **Average Score**: 0.41
-- **Max Score**: 5
-- **Average Fitness**: 27.06
+- **Average Score**: 0.48
+- **Max Score**: 6 (training), 3 (benchmark)
+- **Average Fitness**: 280.35
 
-The competitive fitness system improved average scores by 52% compared to the basic fitness function.
+The energy system with score-based decay creates emergent difficulty scaling.
 
 ## Configuration
 
@@ -118,7 +129,10 @@ cargo run --release -- generate-config config.json
   "game": {
     "grid_width": 8,
     "grid_height": 8,
-    "max_steps_without_food": 100
+    "starting_energy": 100,
+    "energy_per_food": 75,
+    "energy_decay_per_score": 5,
+    "minimum_energy_per_food": 20
   },
   "network": {
     "input_size": 68,

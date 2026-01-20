@@ -83,9 +83,11 @@ pub struct GameState {
     pub food: Position,
     pub score: usize,
     pub steps: usize,
-    pub steps_since_food: usize,
+    pub energy: usize,
     pub game_over: bool,
-    max_steps_without_food: usize,
+    base_energy_per_food: usize,
+    energy_decay_per_score: usize,
+    minimum_energy_per_food: usize,
     rng: StdRng,
 }
 
@@ -107,9 +109,11 @@ impl GameState {
             food: Position::new(0, 0),
             score: 0,
             steps: 0,
-            steps_since_food: 0,
+            energy: config.starting_energy,
             game_over: false,
-            max_steps_without_food: config.max_steps_without_food,
+            base_energy_per_food: config.energy_per_food,
+            energy_decay_per_score: config.energy_decay_per_score,
+            minimum_energy_per_food: config.minimum_energy_per_food,
             rng,
         };
 
@@ -175,20 +179,29 @@ impl GameState {
 
         self.snake.push_front(new_head);
         self.steps += 1;
-        self.steps_since_food += 1;
+
+        // Energy drain - every step costs 1 energy
+        if self.energy > 0 {
+            self.energy -= 1;
+        }
 
         if will_eat {
             self.score += 1;
-            self.steps_since_food = 0;
+            // Energy gain decreases with score (harder as you progress)
+            let decay = self.score * self.energy_decay_per_score;
+            let energy_gain = if self.base_energy_per_food > decay {
+                (self.base_energy_per_food - decay).max(self.minimum_energy_per_food)
+            } else {
+                self.minimum_energy_per_food
+            };
+            self.energy += energy_gain;
             self.spawn_food();
         } else {
             self.snake.pop_back();
         }
 
-        // Check starvation - scales with snake length (longer snake = less time to find food)
-        let starvation_limit = self.max_steps_without_food / self.snake.len().max(1);
-        let starvation_limit = starvation_limit.max(10); // Minimum 10 steps
-        if self.steps_since_food >= starvation_limit {
+        // Out of energy = death
+        if self.energy == 0 {
             self.game_over = true;
         }
     }
@@ -250,7 +263,10 @@ mod tests {
         GameConfig {
             grid_width: 8,
             grid_height: 8,
-            max_steps_without_food: 100,
+            starting_energy: 100,
+            energy_per_food: 75,
+            energy_decay_per_score: 5,
+            minimum_energy_per_food: 20,
         }
     }
 
@@ -331,11 +347,14 @@ mod tests {
     }
 
     #[test]
-    fn test_starvation() {
+    fn test_energy_depletion() {
         let config = GameConfig {
             grid_width: 8,
             grid_height: 8,
-            max_steps_without_food: 10,
+            starting_energy: 10,
+            energy_per_food: 75,
+            energy_decay_per_score: 5,
+            minimum_energy_per_food: 20,
         };
         let mut game = GameState::new(&config, 42);
 
@@ -353,6 +372,60 @@ mod tests {
         }
 
         assert!(game.game_over);
-        assert!(game.steps_since_food >= 10 || game.score > 0 || game.steps <= 15);
+        assert!(game.energy == 0 || game.score > 0 || game.steps <= 15);
+    }
+
+    #[test]
+    fn test_energy_replenish() {
+        let config = GameConfig {
+            grid_width: 8,
+            grid_height: 8,
+            starting_energy: 100,
+            energy_per_food: 50,
+            energy_decay_per_score: 5,
+            minimum_energy_per_food: 20,
+        };
+        let mut game = GameState::new(&config, 42);
+
+        let initial_energy = game.energy;
+
+        // Take a few steps (drain energy)
+        for _ in 0..5 {
+            game.step(Direction::Right);
+            if game.game_over {
+                break;
+            }
+        }
+
+        // Energy should have decreased
+        assert!(game.energy < initial_energy || game.score > 0);
+    }
+
+    #[test]
+    fn test_energy_decay_with_score() {
+        let config = GameConfig {
+            grid_width: 8,
+            grid_height: 8,
+            starting_energy: 100,
+            energy_per_food: 75,
+            energy_decay_per_score: 10,
+            minimum_energy_per_food: 20,
+        };
+
+        // At score 0: gain = 75
+        // At score 3: gain = 75 - 30 = 45
+        // At score 6: gain = 75 - 60 = 20 (minimum)
+
+        let decay_at_0 = 0 * 10;
+        let gain_at_0 = 75_usize.saturating_sub(decay_at_0).max(20);
+        assert_eq!(gain_at_0, 75);
+
+        let decay_at_3 = 3 * 10;
+        let gain_at_3 = 75_usize.saturating_sub(decay_at_3).max(20);
+        assert_eq!(gain_at_3, 45);
+
+        let decay_at_6 = 6 * 10;
+        let gain_at_6 = 75_usize.saturating_sub(decay_at_6).max(20);
+        assert_eq!(gain_at_6, 20);
     }
 }

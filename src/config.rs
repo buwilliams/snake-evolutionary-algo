@@ -4,7 +4,10 @@ use serde::{Deserialize, Serialize};
 pub struct GameConfig {
     pub grid_width: usize,
     pub grid_height: usize,
-    pub max_steps_without_food: usize,
+    pub starting_energy: usize,
+    pub energy_per_food: usize,
+    pub energy_decay_per_score: usize,  // Energy gain decreases as score increases
+    pub minimum_energy_per_food: usize, // Floor for energy gain
 }
 
 impl Default for GameConfig {
@@ -12,7 +15,10 @@ impl Default for GameConfig {
         Self {
             grid_width: 8,
             grid_height: 8,
-            max_steps_without_food: 100,
+            starting_energy: 100,
+            energy_per_food: 75,
+            energy_decay_per_score: 5,   // Lose 5 energy gain per score
+            minimum_energy_per_food: 20, // Never less than 20
         }
     }
 }
