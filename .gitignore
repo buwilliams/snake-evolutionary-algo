@@ -1,0 +1,21 @@
+# Build artifacts
+/target/
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
+
+# Keep best agent files in repo (don't ignore them)
+# !best_agent.json
+# !best_agent_continued.json

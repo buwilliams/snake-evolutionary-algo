@@ -1,0 +1,14 @@
+[package]
+name = "snake-evolutionary-algo"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rand = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+crossterm = "0.27"
+
+[profile.release]
+opt-level = 3
+lto = true
