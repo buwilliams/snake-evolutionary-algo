@@ -4,13 +4,12 @@
     "grid_height": 8,
     "starting_energy": 100,
     "energy_per_food": 75,
-    "energy_decay_per_score": 5,
-    "minimum_energy_per_food": 20,
-    "snakes_per_game": 5
+    "energy_decay_per_score": 3,
+    "minimum_energy_per_food": 30
   },
   "network": {
-    "input_size": 68,
-    "hidden_layers": [32],
+    "input_size": 28,
+    "hidden_layers": [24],
     "output_size": 4,
     "activation": "ReLU"
   },
@@ -23,7 +22,7 @@
     "crossover_rate": 0.7
   },
   "training": {
-    "generations": 20000,
+    "generations": 5000,
     "games_per_evaluation": 3,
     "save_interval": 100,
     "seed": null
@@ -31,12 +30,12 @@
   "growth": {
     "enabled": true,
     "min_start_neurons": 16,
-    "max_start_neurons": 32,
+    "max_start_neurons": 24,
     "start_layers": 1,
-    "growth_score_threshold": 3,
-    "growth_probability": 0.3,
+    "growth_score_threshold": 4,
+    "growth_probability": 0.2,
     "plateau_generations": 500,
-    "max_neurons_per_layer": 128,
-    "max_hidden_layers": 4
+    "max_neurons_per_layer": 64,
+    "max_hidden_layers": 3
   }
 }

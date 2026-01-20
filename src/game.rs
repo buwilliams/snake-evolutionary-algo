@@ -226,20 +226,62 @@ impl GameState {
         Cell::Empty
     }
 
+    /// Raycast encoding: 8 directions × 3 types + 4 direction = 28 inputs
+    /// Provides spatial relationships directly to the network
     pub fn to_network_input(&self) -> Vec<f64> {
-        let mut input = Vec::with_capacity(self.width * self.height + 4);
+        let mut input = Vec::with_capacity(28);
+        let head = self.snake.front().unwrap();
+        let max_dist = (self.width.max(self.height)) as f64;
 
-        // Grid encoding: 0.0=empty, 0.33=body, 0.66=head, 1.0=food
-        for y in 0..self.height {
-            for x in 0..self.width {
-                let value = match self.get_cell(x, y) {
-                    Cell::Empty => 0.0,
-                    Cell::Snake => 0.33,
-                    Cell::SnakeHead => 0.66,
-                    Cell::Food => 1.0,
-                };
-                input.push(value);
+        // 8 directions: N, NE, E, SE, S, SW, W, NW
+        let directions: [(i32, i32); 8] = [
+            (0, -1),  // N
+            (1, -1),  // NE
+            (1, 0),   // E
+            (1, 1),   // SE
+            (0, 1),   // S
+            (-1, 1),  // SW
+            (-1, 0),  // W
+            (-1, -1), // NW
+        ];
+
+        for (dx, dy) in directions {
+            let mut dist_wall = max_dist;
+            let mut dist_food = max_dist;
+            let mut dist_body = max_dist;
+
+            let mut x = head.x;
+            let mut y = head.y;
+            let mut dist = 0.0;
+
+            loop {
+                x += dx;
+                y += dy;
+                dist += 1.0;
+
+                // Check wall
+                if x < 0 || x >= self.width as i32 || y < 0 || y >= self.height as i32 {
+                    dist_wall = dist;
+                    break;
+                }
+
+                let pos = Position::new(x, y);
+
+                // Check food
+                if pos == self.food && dist_food == max_dist {
+                    dist_food = dist;
+                }
+
+                // Check body (skip head)
+                if self.snake.iter().skip(1).any(|s| *s == pos) && dist_body == max_dist {
+                    dist_body = dist;
+                }
             }
+
+            // Normalize distances to [0, 1] where 0 = far, 1 = close
+            input.push(1.0 - dist_wall / max_dist);
+            input.push(1.0 - dist_food / max_dist);
+            input.push(1.0 - dist_body / max_dist);
         }
 
         // Direction one-hot encoding
@@ -250,280 +292,9 @@ impl GameState {
         input
     }
 
-    pub fn input_size(config: &GameConfig) -> usize {
-        config.grid_width * config.grid_height + 4
-    }
-}
-
-/// State for a single snake in competitive mode
-#[derive(Debug, Clone)]
-pub struct CompetitiveSnake {
-    pub body: VecDeque<Position>,
-    pub direction: Direction,
-    pub energy: usize,
-    pub score: usize,
-    pub alive: bool,
-}
-
-impl CompetitiveSnake {
-    pub fn head(&self) -> Position {
-        *self.body.front().unwrap()
-    }
-}
-
-/// Competitive game with multiple snakes competing for food
-pub struct CompetitiveGame {
-    pub width: usize,
-    pub height: usize,
-    pub snakes: Vec<CompetitiveSnake>,
-    pub food: Position,
-    pub steps: usize,
-    pub game_over: bool,
-    base_energy_per_food: usize,
-    energy_decay_per_score: usize,
-    minimum_energy_per_food: usize,
-    rng: StdRng,
-}
-
-impl CompetitiveGame {
-    pub fn new(config: &GameConfig, num_snakes: usize, seed: u64) -> Self {
-        let mut rng = StdRng::seed_from_u64(seed);
-
-        // Spawn snakes at different positions around the grid
-        let mut snakes = Vec::with_capacity(num_snakes);
-        let positions = Self::spawn_positions(config.grid_width, config.grid_height, num_snakes);
-
-        for pos in positions {
-            let mut body = VecDeque::new();
-            body.push_front(pos);
-            snakes.push(CompetitiveSnake {
-                body,
-                direction: Direction::Right,
-                energy: config.starting_energy,
-                score: 0,
-                alive: true,
-            });
-        }
-
-        let mut game = Self {
-            width: config.grid_width,
-            height: config.grid_height,
-            snakes,
-            food: Position::new(0, 0),
-            steps: 0,
-            game_over: false,
-            base_energy_per_food: config.energy_per_food,
-            energy_decay_per_score: config.energy_decay_per_score,
-            minimum_energy_per_food: config.minimum_energy_per_food,
-            rng,
-        };
-
-        game.spawn_food();
-        game
-    }
-
-    fn spawn_positions(width: usize, height: usize, count: usize) -> Vec<Position> {
-        // Distribute snakes around the grid
-        let mut positions = Vec::with_capacity(count);
-        let cx = width as i32 / 2;
-        let cy = height as i32 / 2;
-
-        // Spawn in a pattern around center
-        let offsets = [
-            (0, 0),
-            (-2, -2), (2, -2), (-2, 2), (2, 2),
-            (0, -2), (0, 2), (-2, 0), (2, 0),
-        ];
-
-        for i in 0..count {
-            let (ox, oy) = offsets[i % offsets.len()];
-            let x = (cx + ox).clamp(0, width as i32 - 1);
-            let y = (cy + oy).clamp(0, height as i32 - 1);
-            positions.push(Position::new(x, y));
-        }
-
-        positions
-    }
-
-    pub fn spawn_food(&mut self) {
-        let mut empty_cells = Vec::new();
-
-        for y in 0..self.height {
-            for x in 0..self.width {
-                let pos = Position::new(x as i32, y as i32);
-                let occupied = self.snakes.iter()
-                    .filter(|s| s.alive)
-                    .any(|s| s.body.contains(&pos));
-                if !occupied {
-                    empty_cells.push(pos);
-                }
-            }
-        }
-
-        if !empty_cells.is_empty() {
-            let index = self.rng.gen_range(0..empty_cells.len());
-            self.food = empty_cells[index];
-        }
-    }
-
-    /// Step all snakes simultaneously with their chosen directions
-    pub fn step(&mut self, directions: &[Direction]) {
-        if self.game_over {
-            return;
-        }
-
-        self.steps += 1;
-
-        // Calculate new head positions for all alive snakes
-        let mut new_heads: Vec<Option<Position>> = Vec::with_capacity(self.snakes.len());
-
-        for (i, snake) in self.snakes.iter_mut().enumerate() {
-            if !snake.alive {
-                new_heads.push(None);
-                continue;
-            }
-
-            // Update direction (prevent 180-degree turns)
-            let new_dir = directions[i];
-            if new_dir != snake.direction.opposite() {
-                snake.direction = new_dir;
-            }
-
-            let head = snake.head();
-            let (dx, dy) = snake.direction.to_delta();
-            let new_head = Position::new(head.x + dx, head.y + dy);
-
-            // Check wall collision
-            if new_head.x < 0 || new_head.x >= self.width as i32
-               || new_head.y < 0 || new_head.y >= self.height as i32 {
-                snake.alive = false;
-                new_heads.push(None);
-                continue;
-            }
-
-            // Check self collision
-            let will_eat = new_head == self.food;
-            for (j, segment) in snake.body.iter().enumerate() {
-                if !will_eat && j == snake.body.len() - 1 {
-                    continue;
-                }
-                if *segment == new_head {
-                    snake.alive = false;
-                    new_heads.push(None);
-                    continue;
-                }
-            }
-
-            if snake.alive {
-                new_heads.push(Some(new_head));
-            }
-        }
-
-        // Check which snake(s) reached food first (could be tie)
-        let mut food_eaten = false;
-        let mut eater_index: Option<usize> = None;
-
-        for (i, new_head) in new_heads.iter().enumerate() {
-            if let Some(pos) = new_head {
-                if *pos == self.food {
-                    // First snake to reach food wins (by index for ties)
-                    if !food_eaten {
-                        food_eaten = true;
-                        eater_index = Some(i);
-                    }
-                }
-            }
-        }
-
-        // Apply moves
-        for (i, snake) in self.snakes.iter_mut().enumerate() {
-            if !snake.alive {
-                continue;
-            }
-
-            if let Some(new_head) = new_heads[i] {
-                snake.body.push_front(new_head);
-
-                // Drain energy
-                if snake.energy > 0 {
-                    snake.energy -= 1;
-                }
-
-                // Check if this snake ate the food
-                if Some(i) == eater_index {
-                    snake.score += 1;
-                    let decay = snake.score * self.energy_decay_per_score;
-                    let energy_gain = if self.base_energy_per_food > decay {
-                        (self.base_energy_per_food - decay).max(self.minimum_energy_per_food)
-                    } else {
-                        self.minimum_energy_per_food
-                    };
-                    snake.energy += energy_gain;
-                } else {
-                    snake.body.pop_back();
-                }
-
-                // Check starvation
-                if snake.energy == 0 {
-                    snake.alive = false;
-                }
-            }
-        }
-
-        // Respawn food if eaten
-        if food_eaten {
-            self.spawn_food();
-        }
-
-        // Check if game is over (all snakes dead)
-        let alive_count = self.snakes.iter().filter(|s| s.alive).count();
-        if alive_count == 0 {
-            self.game_over = true;
-        }
-    }
-
-    /// Get network input for a specific snake (sees all snakes + food)
-    pub fn to_network_input(&self, snake_index: usize) -> Vec<f64> {
-        let mut input = Vec::with_capacity(self.width * self.height + 4);
-
-        let this_snake = &self.snakes[snake_index];
-
-        // Grid encoding
-        for y in 0..self.height {
-            for x in 0..self.width {
-                let pos = Position::new(x as i32, y as i32);
-
-                if pos == self.food {
-                    input.push(1.0); // Food
-                } else if pos == this_snake.head() {
-                    input.push(0.66); // Own head
-                } else if this_snake.body.contains(&pos) {
-                    input.push(0.33); // Own body
-                } else {
-                    // Check other snakes' bodies (treat as obstacles)
-                    let is_other_snake = self.snakes.iter()
-                        .enumerate()
-                        .filter(|(i, s)| *i != snake_index && s.alive)
-                        .any(|(_, s)| s.body.contains(&pos));
-                    if is_other_snake {
-                        input.push(0.5); // Other snake (different value)
-                    } else {
-                        input.push(0.0); // Empty
-                    }
-                }
-            }
-        }
-
-        // Direction one-hot encoding
-        for dir in Direction::all() {
-            input.push(if this_snake.direction == dir { 1.0 } else { 0.0 });
-        }
-
-        input
-    }
-
-    pub fn alive_count(&self) -> usize {
-        self.snakes.iter().filter(|s| s.alive).count()
+    pub fn input_size(_config: &GameConfig) -> usize {
+        // Raycast: 8 directions × 3 (wall, food, body) + 4 direction = 28
+        28
     }
 }
 
@@ -539,7 +310,6 @@ mod tests {
             energy_per_food: 75,
             energy_decay_per_score: 5,
             minimum_energy_per_food: 20,
-            snakes_per_game: 5,
         }
     }
 
@@ -597,7 +367,7 @@ mod tests {
         let game = GameState::new(&config, 42);
 
         let input = game.to_network_input();
-        assert_eq!(input.len(), 8 * 8 + 4); // 68
+        assert_eq!(input.len(), 28); // Raycast: 8 dirs × 3 types + 4 direction
     }
 
     #[test]

@@ -1,10 +1,8 @@
-use crate::config::{ActivationType, Config, NetworkConfig};
-use crate::game::{CompetitiveGame, Direction, GameState};
+use crate::config::{Config, NetworkConfig};
+use crate::game::GameState;
 use crate::neural_network::NeuralNetwork;
 use rand::rngs::StdRng;
-use rand::seq::SliceRandom;
 use rand::Rng;
-use rand::SeedableRng;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -70,17 +68,13 @@ impl Agent {
             return false;
         }
 
-        // Check if network is already at max size
-        let sizes = self.network.hidden_layer_sizes();
-        if sizes.len() >= growth.max_hidden_layers {
-            if sizes.iter().all(|&s| s >= growth.max_neurons_per_layer) {
-                return false; // Already maxed out
-            }
-        }
-
-        // Probabilistic growth
+        // Probabilistic growth with caps
         if rng.gen::<f64>() < growth.growth_probability {
-            self.network.grow(rng)
+            self.network.grow_with_caps(
+                rng,
+                growth.max_neurons_per_layer,
+                growth.max_hidden_layers,
+            )
         } else {
             false
         }
@@ -222,71 +216,56 @@ impl Population {
     }
 
     pub fn evaluate(&mut self, base_seed: u64) {
-        // Use competitive evaluation
-        self.evaluate_competitive(base_seed);
+        // Use solo evaluation - each agent plays alone
+        self.evaluate_solo(base_seed);
     }
 
-    /// Run competitive evaluation: shuffle agents into groups, compete for food
+    /// Run solo evaluation: each agent plays games alone
     /// Uses rayon for parallel evaluation across CPU cores
-    pub fn evaluate_competitive(&mut self, base_seed: u64) {
-        let mut rng = StdRng::seed_from_u64(base_seed.wrapping_add(self.generation as u64 * 10000));
-        let snakes_per_game = self.config.game.snakes_per_game;
-        let rounds = self.config.training.games_per_evaluation;
+    pub fn evaluate_solo(&mut self, base_seed: u64) {
+        let games_per_eval = self.config.training.games_per_evaluation;
+        let config = self.config.clone();
 
-        // Reset all fitness scores
-        for agent in &mut self.agents {
-            agent.fitness = 0.0;
-        }
-
-        // Build all competition tasks: (agent_indices, seed)
-        let mut competitions: Vec<(Vec<usize>, u64)> = Vec::new();
-
-        for round in 0..rounds {
-            // Create shuffled indices for this round
-            let mut indices: Vec<usize> = (0..self.agents.len()).collect();
-            indices.shuffle(&mut rng);
-
-            // Group into competitions
-            for chunk in indices.chunks(snakes_per_game) {
-                let game_seed = base_seed
-                    .wrapping_add(self.generation as u64 * 10000)
-                    .wrapping_add(round as u64 * 1000)
-                    .wrapping_add(chunk[0] as u64);
-
-                competitions.push((chunk.to_vec(), game_seed));
-            }
-        }
-
-        // Run all competitions in parallel
-        let results: Vec<(Vec<usize>, Vec<usize>, u64)> = competitions
+        // Evaluate all agents in parallel
+        let results: Vec<(f64, usize, u64)> = self.agents
             .par_iter()
-            .map(|(agent_indices, seed)| {
-                let scores = self.run_competition(agent_indices, *seed);
-                (agent_indices.clone(), scores, *seed)
+            .enumerate()
+            .map(|(idx, agent)| {
+                let mut total_fitness = 0.0;
+                let mut best_score = 0;
+                let mut best_seed = 0;
+
+                for game in 0..games_per_eval {
+                    let seed = base_seed
+                        .wrapping_add(idx as u64 * 10000)
+                        .wrapping_add(game as u64 * 1000);
+
+                    let result = agent.play_game(&config, seed, 0);
+                    total_fitness += result.fitness;
+
+                    if result.score > best_score {
+                        best_score = result.score;
+                        best_seed = seed;
+                    }
+                }
+
+                (total_fitness / games_per_eval as f64, best_score, best_seed)
             })
             .collect();
 
-        // Apply results and track best score
+        // Apply results
         let mut generation_best_score = 0;
         let mut generation_best_seed = 0;
         let mut generation_best_agent_idx = 0;
 
-        for (agent_indices, scores, seed) in results {
-            for (i, &agent_idx) in agent_indices.iter().enumerate() {
-                let score = scores[i];
-                self.agents[agent_idx].fitness += score as f64;
+        for (idx, (fitness, score, seed)) in results.into_iter().enumerate() {
+            self.agents[idx].fitness = fitness;
 
-                if score > generation_best_score {
-                    generation_best_score = score;
-                    generation_best_seed = seed;
-                    generation_best_agent_idx = agent_idx;
-                }
+            if score > generation_best_score {
+                generation_best_score = score;
+                generation_best_seed = seed;
+                generation_best_agent_idx = idx;
             }
-        }
-
-        // Average fitness over rounds
-        for agent in &mut self.agents {
-            agent.fitness /= rounds as f64;
         }
 
         // Update the record if beaten
@@ -300,7 +279,7 @@ impl Population {
             self.generations_since_improvement += 1;
         }
 
-        // Check for plateau - increase floor neurons if stuck
+        // Check for plateau
         if self.config.growth.enabled
             && self.generations_since_improvement >= self.config.growth.plateau_generations
         {
@@ -309,42 +288,12 @@ impl Population {
             if self.floor_neurons > old_floor {
                 println!("  >>> PLATEAU DETECTED: Floor neurons increased {} -> {} <<<", old_floor, self.floor_neurons);
             }
-            self.generations_since_improvement = 0; // Reset counter
+            self.generations_since_improvement = 0;
         }
 
         // Sort by fitness (descending)
         self.agents
             .sort_by(|a, b| b.fitness.partial_cmp(&a.fitness).unwrap());
-    }
-
-    /// Run a single competitive game and return scores for each participant
-    fn run_competition(&self, agent_indices: &[usize], seed: u64) -> Vec<usize> {
-        let num_snakes = agent_indices.len();
-        let mut game = CompetitiveGame::new(&self.config.game, num_snakes, seed);
-
-        // Max steps to prevent infinite games
-        let max_steps = self.config.game.grid_width * self.config.game.grid_height * 10;
-
-        while !game.game_over && game.steps < max_steps {
-            // Get direction from each agent's network
-            let directions: Vec<Direction> = agent_indices
-                .iter()
-                .enumerate()
-                .map(|(snake_idx, &agent_idx)| {
-                    if game.snakes[snake_idx].alive {
-                        let input = game.to_network_input(snake_idx);
-                        self.agents[agent_idx].network.decide(&input)
-                    } else {
-                        Direction::Right // Doesn't matter, snake is dead
-                    }
-                })
-                .collect();
-
-            game.step(&directions);
-        }
-
-        // Return scores for each snake
-        game.snakes.iter().map(|s| s.score).collect()
     }
 
     pub fn tournament_select(&self, rng: &mut StdRng) -> &Agent {

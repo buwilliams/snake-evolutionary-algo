@@ -8,7 +8,6 @@ pub struct GameConfig {
     pub energy_per_food: usize,
     pub energy_decay_per_score: usize,  // Energy gain decreases as score increases
     pub minimum_energy_per_food: usize, // Floor for energy gain
-    pub snakes_per_game: usize,         // Number of snakes competing for food
 }
 
 impl Default for GameConfig {
@@ -20,7 +19,6 @@ impl Default for GameConfig {
             energy_per_food: 75,
             energy_decay_per_score: 5,   // Lose 5 energy gain per score
             minimum_energy_per_food: 20, // Never less than 20
-            snakes_per_game: 5,          // 5 snakes compete for food
         }
     }
 }
@@ -40,22 +38,21 @@ pub struct NetworkConfig {
 }
 
 impl NetworkConfig {
-    pub fn new(game_config: &GameConfig) -> Self {
-        let input_size = game_config.grid_width * game_config.grid_height + 4;
+    pub fn new(_game_config: &GameConfig) -> Self {
+        // Raycast encoding: 8 directions × 3 (wall, food, body) + 4 direction = 28
         Self {
-            input_size,
-            hidden_layers: vec![64, 32],
+            input_size: 28,
+            hidden_layers: vec![32],
             output_size: 4,
             activation: ActivationType::ReLU,
         }
     }
 
-    pub fn validate(&self, game_config: &GameConfig) -> Result<(), String> {
-        let expected_input = game_config.grid_width * game_config.grid_height + 4;
-        if self.input_size != expected_input {
+    pub fn validate(&self, _game_config: &GameConfig) -> Result<(), String> {
+        if self.input_size != 28 {
             return Err(format!(
-                "Input size mismatch: expected {} for {}x{} grid, got {}",
-                expected_input, game_config.grid_width, game_config.grid_height, self.input_size
+                "Input size must be 28 (raycast encoding), got {}",
+                self.input_size
             ));
         }
         if self.output_size != 4 {
@@ -207,7 +204,7 @@ mod tests {
     fn test_input_size_calculation() {
         let game = GameConfig::default();
         let network = NetworkConfig::new(&game);
-        assert_eq!(network.input_size, 8 * 8 + 4); // 68
+        assert_eq!(network.input_size, 28); // Raycast: 8 dirs × 3 types + 4 direction
     }
 
     #[test]
