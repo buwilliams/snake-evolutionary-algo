@@ -10,8 +10,28 @@ use game::{Cell, GameState};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use std::env;
+use std::path::Path;
 use std::time::Instant;
 use visualizer::{print_benchmark_results, print_training_header, print_training_stats, Visualizer};
+
+fn snapshot_path(output_path: &str, generation: usize) -> String {
+    let path = Path::new(output_path);
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    let ext = path.extension().unwrap_or_default().to_string_lossy();
+    let parent = path.parent().unwrap_or(Path::new(""));
+
+    let snapshot_name = if ext.is_empty() {
+        format!("{}_gen_{}", stem, generation)
+    } else {
+        format!("{}_gen_{}.{}", stem, generation, ext)
+    };
+
+    if parent.as_os_str().is_empty() {
+        snapshot_name
+    } else {
+        parent.join(snapshot_name).to_string_lossy().to_string()
+    }
+}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -167,14 +187,20 @@ fn train(config_path: Option<&str>, output_path: &str) {
             stats.best_score,
         );
 
-        // Save checkpoint
+        // Save checkpoint and snapshot
         if gen % config.training.save_interval == 0 || gen == config.training.generations - 1 {
             if let Some(best) = population.best_agent() {
                 let saved = SavedAgent::new(best, gen, population.best_score_ever, population.best_score_seed, population.record_agent.as_ref(), &config);
+                // Save to main output file
                 if let Err(e) = saved.save(output_path) {
                     eprintln!("Warning: Failed to save agent: {}", e);
-                } else if gen % config.training.save_interval == 0 {
-                    println!("  -> Saved checkpoint to {}", output_path);
+                }
+                // Save snapshot with generation number
+                let snap_path = snapshot_path(output_path, gen);
+                if let Err(e) = saved.save(&snap_path) {
+                    eprintln!("Warning: Failed to save snapshot: {}", e);
+                } else {
+                    println!("  -> Saved snapshot to {}", snap_path);
                 }
             }
         }
@@ -446,14 +472,20 @@ fn continue_training(agent_path: &str, output_path: &str, generations: usize) {
             stats.best_score,
         );
 
-        // Save checkpoint
+        // Save checkpoint and snapshot
         if gen % config.training.save_interval == 0 || gen == generations - 1 {
             if let Some(best) = population.best_agent() {
                 let saved = SavedAgent::new(best, actual_gen, population.best_score_ever, population.best_score_seed, population.record_agent.as_ref(), &config);
+                // Save to main output file
                 if let Err(e) = saved.save(output_path) {
                     eprintln!("Warning: Failed to save agent: {}", e);
-                } else if gen % config.training.save_interval == 0 {
-                    println!("  -> Saved checkpoint to {}", output_path);
+                }
+                // Save snapshot with generation number
+                let snap_path = snapshot_path(output_path, actual_gen);
+                if let Err(e) = saved.save(&snap_path) {
+                    eprintln!("Warning: Failed to save snapshot: {}", e);
+                } else {
+                    println!("  -> Saved snapshot to {}", snap_path);
                 }
             }
         }

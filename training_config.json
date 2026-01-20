@@ -22,7 +22,7 @@
     "crossover_rate": 0.7
   },
   "training": {
-    "generations": 5000,
+    "generations": 500,
     "games_per_evaluation": 3,
     "save_interval": 100,
     "seed": null
